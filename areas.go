@@ -35,14 +35,15 @@ type Group struct {
 
 var xLen = 100
 var yLen = 70
-var scaleFactor = 4
+var scaleFactor = 1
 var numWorkersX = runtime.NumCPU()
-var numWorkersY = 1
-var numWorkersP = 1
-var fanPlayers = false
-var deepFan = false
 
-var players = make([]Player, 15)
+// var numWorkersY = 1
+// var numWorkersP = 1
+// var fanPlayers = false
+// var deepFan = false
+
+var players = make([]Player, 30)
 
 func main() {
 	fmt.Println(runtime.NumCPU())
@@ -73,11 +74,7 @@ func calcAreas() {
 	workers := make([]<-chan Group, numWorkersX)
 
 	for i := range workers {
-		if deepFan {
-			workers[i] = doWork(in)
-		} else {
-			workers[i] = doWorkNoChan(in)
-		}
+		workers[i] = doWork(in)
 	}
 
 	c := merge(workers)
@@ -135,7 +132,7 @@ func genPChannel(players []Player) <-chan Player {
 	return out
 }
 
-func doWorkNoChan(in <-chan Group) <-chan Group {
+func doWork(in <-chan Group) <-chan Group {
 	out := make(chan Group)
 
 	go func() {
@@ -169,103 +166,13 @@ func doWorkNoChan(in <-chan Group) <-chan Group {
 	return out
 }
 
-func doWork(in <-chan Group) <-chan Group {
-	out := make(chan Group)
-
-	go func() {
-		for group := range in {
-
-			group.yVals = make([]int, yLen*scaleFactor)
-			group.results = make([]Result, yLen*scaleFactor)
-			in := genYChannel(group.yVals)
-
-			workers := make([]<-chan Result, numWorkersY)
-
-			for i := range workers {
-				workers[i] = getResult(in, group.xVal)
-			}
-			c := mergeResults(workers)
-
-			for res := range c {
-				group.results[res.yVal] = res
-			}
-			out <- group
-		}
-		close(out)
-	}()
-
-	return out
-}
-
-func getResult(in <-chan int, x int) <-chan Result {
-	out := make(chan Result)
-	go func() {
-		for yVal := range in {
-
-			// Without channels
-			if !fanPlayers {
-				topResult := Result{yVal: yVal}
-
-				for _, player := range players {
-					time := getTimeToPoint(x, yVal, player)
-					// fmt.Println(time, topResult.time)
-					if time < topResult.time || topResult.time == 0.0 {
-						topResult.time = time
-						topResult.playerId = player.id
-					}
-
-				}
-				out <- topResult
-			} else {
-				//With channels
-
-				var topResult Result
-
-				in := genPChannel(players)
-
-				workers := make([]<-chan Result, numWorkersP)
-
-				for i := range workers {
-					workers[i] = getClosestPlayer(in, x, yVal)
-				}
-
-				c := mergeTime(workers)
-
-				for res := range c {
-					if res.time < topResult.time || topResult.time == 0.0 {
-						topResult = res
-					}
-				}
-				out <- topResult
-			}
-		}
-		close(out)
-	}()
-	return out
-}
-
-func getClosestPlayer(in <-chan Player, x int, y int) <-chan Result {
-	out := make(chan Result)
-
-	go func() {
-		for player := range in {
-			time := getTimeToPoint(x, y, player)
-			result := Result{yVal: y, time: time, playerId: player.id}
-			out <- result
-		}
-		close(out)
-	}()
-
-	return out
-}
-
 func getTimeToPoint(x int, y int, player Player) float64 {
 
 	var pointA = []float64{float64(x), float64(y)}
 	var pointB = []float64{player.x, player.y}
 
 	d := getDistance(pointA, pointB)
-	c := 0.0
+	c := getInitialvelocityToPoint(pointA, player)
 
 	b := player.maxV
 	a := player.maxA
@@ -276,17 +183,6 @@ func getTimeToPoint(x int, y int, player Player) float64 {
 	time := top / (a * b * math.Log(math.E))
 
 	return time
-}
-
-func getDistance(pointA []float64, pointB []float64) float64 {
-	pointA[0] = pointA[0]/float64(scaleFactor) - float64(xLen)/2
-	pointA[1] = pointA[1] / float64(scaleFactor)
-	x := math.Abs(pointA[0] - pointB[0])
-	y := math.Abs(pointA[1] - pointB[1])
-
-	distance := math.Sqrt(math.Pow(x, 2) + math.Pow(y, 2))
-
-	return distance
 }
 
 func merge(workers []<-chan Group) <-chan Group {
@@ -314,52 +210,178 @@ func merge(workers []<-chan Group) <-chan Group {
 	return out
 }
 
-func mergeTime(workers []<-chan Result) <-chan Result {
-	var wg sync.WaitGroup
-	out := make(chan Result)
+func getDistance(pointA []float64, pointB []float64) float64 {
+	pointA[0] = pointA[0]/float64(scaleFactor) - float64(xLen)/2
+	pointA[1] = pointA[1] / float64(scaleFactor)
+	x := math.Abs(pointA[0] - pointB[0])
+	y := math.Abs(pointA[1] - pointB[1])
 
-	output := func(c <-chan Result) {
-		for result := range c {
-			out <- result
-		}
-		wg.Done()
-	}
+	distance := math.Sqrt(math.Pow(x, 2) + math.Pow(y, 2))
 
-	wg.Add(len(workers))
-
-	for _, worker := range workers {
-		go output(worker)
-	}
-
-	go func() {
-		wg.Wait()
-		close(out)
-	}()
-
-	return out
+	return distance
 }
 
-func mergeResults(workers []<-chan Result) <-chan Result {
-	var wg sync.WaitGroup
-	out := make(chan Result)
+func getInitialvelocityToPoint(point []float64, player Player) float64 {
 
-	output := func(c <-chan Result) {
-		for result := range c {
-			out <- result
+	getVel := func(d float64, v float64, angle float64) float64 {
+		sign := -1.0
+		if (v < 0 && d < 0) || (v > 0 && d > 0) {
+			sign = 1.0
 		}
-		wg.Done()
+		vel := math.Abs(v*math.Cos(angle)) * sign
+		return vel
 	}
 
-	wg.Add(len(workers))
+	dy := point[1] - player.y
+	dx := point[0] - player.x
 
-	for _, worker := range workers {
-		go output(worker)
-	}
+	angleY := math.Atan(dx / dy)
+	velY := getVel(dy, player.velY, angleY)
 
-	go func() {
-		wg.Wait()
-		close(out)
-	}()
+	angleX := math.Atan(dy / dx)
+	velX := getVel(dx, player.velX, angleX)
 
-	return out
+	speed := velY + velX
+
+	return speed
 }
+
+// func getClosestPlayer(in <-chan Player, x int, y int) <-chan Result {
+// 	out := make(chan Result)
+//
+// 	go func() {
+// 		for player := range in {
+// 			time := getTimeToPoint(x, y, player)
+// 			result := Result{yVal: y, time: time, playerId: player.id}
+// 			out <- result
+// 		}
+// 		close(out)
+// 	}()
+//
+// 	return out
+// }
+
+// func doWork(in <-chan Group) <-chan Group {
+// 	out := make(chan Group)
+//
+// 	go func() {
+// 		for group := range in {
+//
+// 			group.yVals = make([]int, yLen*scaleFactor)
+// 			group.results = make([]Result, yLen*scaleFactor)
+// 			in := genYChannel(group.yVals)
+//
+// 			workers := make([]<-chan Result, numWorkersY)
+//
+// 			for i := range workers {
+// 				workers[i] = getResult(in, group.xVal)
+// 			}
+// 			c := mergeResults(workers)
+//
+// 			for res := range c {
+// 				group.results[res.yVal] = res
+// 			}
+// 			out <- group
+// 		}
+// 		close(out)
+// 	}()
+//
+// 	return out
+// }
+//
+// func getResult(in <-chan int, x int) <-chan Result {
+// 	out := make(chan Result)
+// 	go func() {
+// 		for yVal := range in {
+//
+// 			// Without channels
+// 			if !fanPlayers {
+// 				topResult := Result{yVal: yVal}
+//
+// 				for _, player := range players {
+// 					time := getTimeToPoint(x, yVal, player)
+// 					// fmt.Println(time, topResult.time)
+// 					if time < topResult.time || topResult.time == 0.0 {
+// 						topResult.time = time
+// 						topResult.playerId = player.id
+// 					}
+//
+// 				}
+// 				out <- topResult
+// 			} else {
+// 				//With channels
+//
+// 				var topResult Result
+//
+// 				in := genPChannel(players)
+//
+// 				workers := make([]<-chan Result, numWorkersP)
+//
+// 				for i := range workers {
+// 					workers[i] = getClosestPlayer(in, x, yVal)
+// 				}
+//
+// 				c := mergeTime(workers)
+//
+// 				for res := range c {
+// 					if res.time < topResult.time || topResult.time == 0.0 {
+// 						topResult = res
+// 					}
+// 				}
+// 				out <- topResult
+// 			}
+// 		}
+// 		close(out)
+// 	}()
+// 	return out
+// }
+
+// func mergeTime(workers []<-chan Result) <-chan Result {
+// 	var wg sync.WaitGroup
+// 	out := make(chan Result)
+//
+// 	output := func(c <-chan Result) {
+// 		for result := range c {
+// 			out <- result
+// 		}
+// 		wg.Done()
+// 	}
+//
+// 	wg.Add(len(workers))
+//
+// 	for _, worker := range workers {
+// 		go output(worker)
+// 	}
+//
+// 	go func() {
+// 		wg.Wait()
+// 		close(out)
+// 	}()
+//
+// 	return out
+// }
+//
+// func mergeResults(workers []<-chan Result) <-chan Result {
+// 	var wg sync.WaitGroup
+// 	out := make(chan Result)
+//
+// 	output := func(c <-chan Result) {
+// 		for result := range c {
+// 			out <- result
+// 		}
+// 		wg.Done()
+// 	}
+//
+// 	wg.Add(len(workers))
+//
+// 	for _, worker := range workers {
+// 		go output(worker)
+// 	}
+//
+// 	go func() {
+// 		wg.Wait()
+// 		close(out)
+// 	}()
+//
+// 	return out
+// }
