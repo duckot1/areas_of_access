@@ -1,4 +1,4 @@
-package main
+package areas
 
 import (
 	"fmt"
@@ -42,25 +42,6 @@ var numWorkersX = runtime.NumCPU()
 // var numWorkersP = 1
 // var fanPlayers = false
 // var deepFan = false
-
-var players = make([]Player, 30)
-
-func main() {
-	fmt.Println(runtime.NumCPU())
-	for i := range players {
-		players[i] = Player{
-			x:    rand.Float64()*100 - 50,
-			y:    rand.Float64() * 70,
-			velX: rand.Float64() * 5,
-			velY: rand.Float64() * 5,
-			maxA: rand.Float64()*4 + 6,
-			maxV: rand.Float64()*4 + 6,
-			id:   i,
-		}
-	}
-
-	calcAreas()
-}
 
 func calcAreas() {
 
